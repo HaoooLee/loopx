@@ -579,7 +579,7 @@ def build_rollback_plan(
 ) -> dict[str, Any]:
     doctor = doctor_payload or collect_doctor()
     current_release_root = _release_root_from_doctor(doctor)
-    releases_dir = _user_releases_dir(home)
+    releases_dir = Path(os.environ.get("LOOPX_RELEASES_DIR") or _user_releases_dir(home))
     releases = _list_release_roots(releases_dir)
     current_root_path = (
         Path(current_release_root).resolve() if current_release_root else None
@@ -1394,7 +1394,7 @@ def execute_rollback_plan(
         return payload
     release_root = Path(str(selected_release_root))
     target_script = _release_script(release_root)
-    loopx_bin = _user_loopx_bin(home)
+    loopx_bin = Path(os.environ.get("LOOPX_BIN_DIR") or _user_loopx_bin(home).parent) / "loopx"
     previous_link_target = os.readlink(loopx_bin) if loopx_bin.is_symlink() else None
     execution: dict[str, Any] = {
         "target_script": str(target_script),

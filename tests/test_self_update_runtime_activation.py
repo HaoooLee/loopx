@@ -18,7 +18,9 @@ import pytest
 from loopx.control_plane.runtime import runtime_projection_route
 from loopx.self_update import (
     UpdateAction,
+    build_rollback_plan,
     build_update_plan,
+    execute_rollback_plan,
     execute_update_plan,
     resolve_update_action,
 )
@@ -1029,6 +1031,44 @@ def test_archive_readback_and_activation_follow_installer_bin_owner(
         assert result["execution"]["restarted_services"] == []
     if extension_returncode:
         assert result["next_action"]["kind"] == "repair_blocked_extensions"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX archive rollback")
+@pytest.mark.parametrize("directory_override", [None, "", "custom"])
+def test_rollback_follows_installation_directories(tmp_path, monkeypatch, directory_override):
+    default_bin = tmp_path / ".local/bin/loopx"
+    releases = tmp_path / (
+        "custom/releases" if directory_override else ".local/share/loopx/releases"
+    )
+    launcher = tmp_path / "custom/bin/loopx" if directory_override else default_bin
+    for variable, directory in (("LOOPX_RELEASES_DIR", releases), ("LOOPX_BIN_DIR", launcher.parent)):
+        monkeypatch.delenv(variable, raising=False)
+        if directory_override is not None:
+            monkeypatch.setenv(variable, str(directory) if directory_override else "")
+    previous, current = releases / "release-1", releases / "release-2"
+    for release in (previous, current):
+        (release / "scripts").mkdir(parents=True)
+        (release / "scripts/loopx").touch()
+    for entry in {default_bin, launcher}:
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        entry.symlink_to(current / "scripts/loopx")
+
+    plan = build_rollback_plan(
+        release_id="previous", home=tmp_path,
+        doctor_payload={"package": {"release_root": str(current)}},
+    )
+    assert plan["ok"]
+    assert plan["plan"]["selected_release_root"] == str(previous)
+    passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
+    with mock.patch("loopx.self_update.subprocess.run", return_value=passed) as run:
+        result = execute_rollback_plan(plan, home=tmp_path)
+    assert result["ok"]
+    assert launcher.resolve() == previous / "scripts/loopx"
+    assert [call.args[0][0] for call in run.call_args_list] == [
+        str(previous / "scripts/loopx"), str(launcher), str(launcher),
+    ]
+    if directory_override:
+        assert default_bin.resolve() == current / "scripts/loopx"
 
 
 @pytest.mark.parametrize("driver", ["python_pip", "python_pipx"])
